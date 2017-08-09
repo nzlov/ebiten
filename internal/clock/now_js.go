@@ -1,4 +1,4 @@
-// Copyright 2014 Hajime Hoshi
+// Copyright 2016 Hajime Hoshi
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphics
+// +build js
 
-func NextPowerOf2Int(x int) int {
-	if x <= 0 {
-		panic("x must be positive")
-	}
-	r := 1
-	for r < x {
-		r <<= 1
-	}
-	return r
+package clock
+
+import (
+	"time"
+
+	"github.com/gopherjs/gopherjs/js"
+)
+
+func now() int64 {
+	// time.Now() is not reliable until GopherJS supports performance.now().
+	return int64(js.Global.Get("performance").Call("now").Float() * float64(time.Millisecond))
 }

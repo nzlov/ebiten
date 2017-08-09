@@ -18,9 +18,9 @@ Note: Gamepad is not available on Safari/Android/iOS. Keyboard is not available 
 
 ## Features
 
-* 2D Graphics (Geometry/Color matrix transformation, Various composition modes, Offscreen rendering)
+* 2D Graphics (Geometry/Color matrix transformation, Various composition modes, Offscreen rendering, Fullscreen, Text rendering)
 * Input (Mouse, Keyboard, Gamepads, Touches)
-* Audio (Ogg/Vorbis, WAV, PCM)
+* Audio (MP3, Ogg/Vorbis, WAV, PCM, Syncing with game progress)
 
 ## Web Site
 

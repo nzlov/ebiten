@@ -106,8 +106,34 @@ func ScreenScale() float64 {
 	return currentUI.scale
 }
 
+func ScreenOffset() (float64, float64) {
+	return 0, 0
+}
+
+func adjustCursorPosition(x, y int) (int, int) {
+	return x, y
+}
+
 func SetCursorVisibility(visibility bool) {
 	// Do nothing
+}
+
+func SetFullscreen(fullscreen bool) {
+	// Do nothing
+}
+
+func IsFullscreen() bool {
+	// Do nothing
+	return false
+}
+
+func SetRunnableInBackground(runnableInBackground bool) {
+	// Do nothing
+}
+
+func IsRunnableInBackground() bool {
+	// Do nothing
+	return false
 }
 
 func (u *userInterface) actualScreenScale() float64 {

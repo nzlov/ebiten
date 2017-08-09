@@ -17,12 +17,12 @@ package ebiten
 import (
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/internal/loop"
+	"github.com/hajimehoshi/ebiten/internal/clock"
 	"github.com/hajimehoshi/ebiten/internal/ui"
 )
 
-// FPS represents how many times game updating happens in a second.
-const FPS = 60
+// FPS represents how many times game updating happens in a second (60).
+const FPS = clock.FPS
 
 // CurrentFPS returns the current number of frames per second of rendering.
 //
@@ -33,7 +33,7 @@ const FPS = 60
 // Note that logical game updating is assured to happen 60 times in a second
 // as long as the screen is active.
 func CurrentFPS() float64 {
-	return loop.CurrentFPS()
+	return clock.CurrentFPS()
 }
 
 var (
@@ -59,6 +59,36 @@ func IsRunningSlowly() bool {
 
 var theGraphicsContext atomic.Value
 
+func run(width, height int, scale float64, title string, g *graphicsContext) error {
+	if err := ui.Run(width, height, scale, title, &updater{g}); err != nil {
+		if _, ok := err.(*ui.RegularTermination); ok {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+type updater struct {
+	g *graphicsContext
+}
+
+func (u *updater) SetSize(width, height int, scale float64) {
+	u.g.SetSize(width, height, scale)
+}
+
+func (u *updater) Update() error {
+	n := clock.Update()
+	if err := u.g.Update(n); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (u *updater) Invalidate() {
+	u.g.Invalidate()
+}
+
 // Run runs the game.
 // f is a function which is called at every frame.
 // The argument (*Image) is the render target that represents the screen.
@@ -70,6 +100,8 @@ var theGraphicsContext atomic.Value
 // even if a rendering frame is skipped.
 // f is not called when the screen is not shown.
 //
+// The given scale is ignored on fullscreen mode.
+//
 // Run returns error when 1) OpenGL error happens, or 2) f returns error.
 // In the case of 2), Run returns the same error.
 //
@@ -77,12 +109,14 @@ var theGraphicsContext atomic.Value
 func Run(f func(*Image) error, width, height int, scale float64, title string) error {
 	ch := make(chan error)
 	go func() {
+		defer close(ch)
+
 		g := newGraphicsContext(f)
 		theGraphicsContext.Store(g)
-		if err := loop.Run(g, width, height, scale, title, FPS); err != nil {
+		if err := run(width, height, scale, title, g); err != nil {
 			ch <- err
+			return
 		}
-		close(ch)
 	}()
 	// TODO: Use context in Go 1.7?
 	if err := ui.RunMainThreadLoop(ch); err != nil {
@@ -101,12 +135,14 @@ func Run(f func(*Image) error, width, height int, scale float64, title string) e
 func RunWithoutMainLoop(f func(*Image) error, width, height int, scale float64, title string) <-chan error {
 	ch := make(chan error)
 	go func() {
+		defer close(ch)
+
 		g := newGraphicsContext(f)
 		theGraphicsContext.Store(g)
-		if err := loop.Run(g, width, height, scale, title, FPS); err != nil {
+		if err := run(width, height, scale, title, g); err != nil {
 			ch <- err
+			return
 		}
-		close(ch)
 	}()
 	return ch
 }
@@ -148,4 +184,52 @@ func ScreenScale() float64 {
 // This function is concurrent-safe.
 func SetCursorVisibility(visible bool) {
 	ui.SetCursorVisibility(visible)
+}
+
+// IsScreen returns a boolean value indicating whether
+// the current mode is fullscreen or not.
+//
+// This function is concurrent-safe.
+func IsFullscreen() bool {
+	return ui.IsFullscreen()
+}
+
+// SetFullscreen changes the current mode to fullscreen or not.
+//
+// On fullscreen mode, the game screen is automatically enlarged
+// to fit with the monitor. The current scale value is ignored.
+//
+// On desktops, Ebiten uses 'windowed' fullscreen mode, which doesn't change
+// your monitor's resolution.
+//
+// On browsers, the game screen is resized to fit with the body element (client) size.
+// Additionally, the game screen is automatically resized when the body element is resized.
+//
+// SetFullscreen doesn't work on mobiles.
+//
+// This function is concurrent-safe.
+func SetFullscreen(fullscreen bool) {
+	ui.SetFullscreen(fullscreen)
+}
+
+// IsRunnableInBackground returns a boolean value indicating whether the game runs even in background.
+//
+// This function is concurrent-safe.
+func IsRunnableInBackground() bool {
+	return ui.IsRunnableInBackground()
+}
+
+// SetRunnableInBackground sets the state if the game runs even in background.
+//
+// If the given value is true, the game runs in background e.g. when losing focus.
+// The initial state is false.
+//
+// Known issue: On browsers, even if the state is on, the game doesn't run in background tabs.
+// This is because browsers throttles background tabs not to often update.
+//
+// SetRunnableInBackground doesn't work on mobiles so far.
+//
+// This function is concurrent-safe.
+func SetRunnableInBackground(runnableInBackground bool) {
+	ui.SetRunnableInBackground(runnableInBackground)
 }

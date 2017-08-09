@@ -24,6 +24,8 @@
 // and you can play sound by calling Play function of players.
 // When multiple players play, mixing is automatically done.
 // Note that too many players may cause distortion.
+//
+// Ebiten's game progress always synchronizes with audio progress.
 package audio
 
 import (
@@ -34,8 +36,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/oto"
+
+	"github.com/hajimehoshi/ebiten/internal/clock"
 )
 
 type players struct {
@@ -165,16 +168,17 @@ func (p *players) hasSource(src ReadSeekCloser) bool {
 //        }
 //        ebiten.Run(run, update, 320, 240, 2, "Audio test")
 //    }
-//
-// This is 'sync mode' in that game's (logical) time and audio time are synchronized.
-// You can also call Update independently from the game loop as 'async mode'.
-// In this case, audio goes on even when the game stops e.g. by diactivating the screen.
 type Context struct {
-	players      *players
-	driver       *oto.Player
-	sampleRate   int
-	frames       int64
-	writtenBytes int64
+	players        *players
+	errCh          chan error
+	initCh         chan struct{}
+	initedCh       chan struct{}
+	pingCount      int
+	sampleRate     int
+	frames         int64
+	framesReadOnly int64
+	writtenBytes   int64
+	m              sync.Mutex
 }
 
 var (
@@ -195,59 +199,94 @@ func NewContext(sampleRate int) (*Context, error) {
 	}
 	c := &Context{
 		sampleRate: sampleRate,
+		errCh:      make(chan error, 1),
+		initCh:     make(chan struct{}),
+		initedCh:   make(chan struct{}),
 	}
 	theContext = c
 	c.players = &players{
 		players: map[*Player]struct{}{},
 	}
-	return c, nil
 
+	go c.loop()
+
+	return c, nil
 }
 
-// Update proceeds the inner (logical) time of the context by 1/60 second.
-//
-// This is expected to be called in the game's updating function (sync mode)
-// or an independent goroutine with timers (async mode).
-// In sync mode, the game logical time syncs the audio logical time and
-// you will find audio stops when the game stops e.g. when the window is deactivated.
-// In async mode, the audio never stops even when the game stops.
-//
-// Update returns error when IO error occurs in the underlying IO object.
-func (c *Context) Update() error {
-	// Initialize c.driver lazily to enable calling NewContext in an 'init' function.
-	// Accessing driver functions requires the environment to be already initialized,
+func CurrentContext() *Context {
+	theContextLock.Lock()
+	c := theContext
+	theContextLock.Unlock()
+	return c
+}
+
+func (c *Context) ping() {
+	if c.initCh != nil {
+		close(c.initCh)
+		c.initCh = nil
+		<-c.initedCh
+	}
+	c.m.Lock()
+	c.pingCount = 5
+	c.m.Unlock()
+}
+
+func (c *Context) loop() {
+	clock.RegisterPing(c.ping)
+
+	// Initialize oto.Player lazily to enable calling NewContext in an 'init' function.
+	// Accessing oto.Player functions requires the environment to be already initialized,
 	// but if Ebiten is used for a shared library, the timing when init functions are called
 	// is unexpectable.
 	// e.g. a variable for JVM on Android might not be set.
-	if c.driver == nil {
-		// The buffer size is 1/15 sec.
-		// It looks like 1/20 sec is too short for Android.
-		s := c.sampleRate * channelNum * bytesPerSample / 15
-		p, err := oto.NewPlayer(c.sampleRate, channelNum, bytesPerSample, s)
-		c.driver = p
-		if err != nil {
-			return err
+	<-c.initCh
+
+	p, err := oto.NewPlayer(c.sampleRate, channelNum, bytesPerSample, c.bufferSize())
+	if err != nil {
+		c.errCh <- err
+		return
+	}
+	defer p.Close()
+
+	close(c.initedCh)
+	c.initedCh = nil
+
+	for {
+		c.m.Lock()
+		if c.pingCount == 0 {
+			c.m.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		c.pingCount--
+		c.m.Unlock()
+		c.frames++
+		clock.ProceedPrimaryTimer()
+		bytesPerFrame := c.sampleRate * bytesPerSample * channelNum / clock.FPS
+		l := (c.frames * int64(bytesPerFrame)) - c.writtenBytes
+		l &= mask
+		c.writtenBytes += l
+		buf := make([]uint8, l)
+		if _, err := io.ReadFull(c.players, buf); err != nil {
+			c.errCh <- err
+		}
+		if _, err = p.Write(buf); err != nil {
+			c.errCh <- err
 		}
 	}
-	c.frames++
-	bytesPerFrame := c.sampleRate * bytesPerSample * channelNum / ebiten.FPS
-	l := (c.frames * int64(bytesPerFrame)) - c.writtenBytes
-	l &= mask
-	c.writtenBytes += l
-	buf := make([]uint8, l)
-	n, err := io.ReadFull(c.players, buf)
-	if err != nil {
+}
+
+// Update returns an error if some errors happen.
+//
+// As of 1.6.0-alpha, this just returns the error if an error happens internally,
+// and do nothing related to updating the state.
+// Then, the audio is available without Update,
+// but it is recommended to call Update every frame.
+func (c *Context) Update() error {
+	select {
+	case err := <-c.errCh:
 		return err
-	}
-	if n != len(buf) {
-		return c.driver.Close()
-	}
-	_, err = c.driver.Write(buf)
-	if err == io.EOF {
-		return c.driver.Close()
-	}
-	if err != nil {
-		return err
+	default:
 	}
 	return nil
 }
@@ -297,8 +336,6 @@ type Player struct {
 	players    *players
 	src        ReadSeekCloser
 	sampleRate int
-	readingCh  chan readingResult
-	seekCh     chan int64
 
 	buf    []uint8
 	pos    int64
@@ -326,7 +363,6 @@ func NewPlayer(context *Context, src ReadSeekCloser) (*Player, error) {
 		players:    context.players,
 		src:        src,
 		sampleRate: context.sampleRate,
-		seekCh:     make(chan int64, 1),
 		buf:        []uint8{},
 		volume:     1,
 	}
@@ -375,50 +411,20 @@ func (p *Player) Close() error {
 }
 
 func (p *Player) readToBuffer(length int) (int, error) {
-	if p.readingCh == nil {
-		p.readingCh = make(chan readingResult)
-		go func() {
-			defer close(p.readingCh)
-			b := make([]uint8, length)
-			p.srcM.Lock()
-			n, err := p.src.Read(b)
-			p.srcM.Unlock()
-			if err != nil {
-				p.readingCh <- readingResult{
-					err: err,
-				}
-				return
-			}
-			p.readingCh <- readingResult{
-				data: b[:n],
-			}
-		}()
+	b := make([]uint8, length)
+	p.srcM.Lock()
+	n, err := p.src.Read(b)
+	p.srcM.Unlock()
+	if err != nil {
+		return 0, err
 	}
-	select {
-	case pos := <-p.seekCh:
-		p.buf = []uint8{}
-		p.pos = pos
-		return 0, nil
-	case r := <-p.readingCh:
-		if r.err != nil {
-			return 0, r.err
-		}
-		if len(r.data) > 0 {
-			p.buf = append(p.buf, r.data...)
-		}
-		p.readingCh = nil
-		return len(p.buf), nil
-	case <-time.After(15 * time.Millisecond):
-		return length, nil
-	}
+	p.buf = append(p.buf, b[:n]...)
+	return len(p.buf), nil
 }
 
 func (p *Player) bufferToInt16(lengthInBytes int) []int16 {
 	r := make([]int16, lengthInBytes/2)
 	// This function must be called on the same goruotine of readToBuffer.
-	if p.readingCh != nil {
-		return r
-	}
 	p.m.RLock()
 	for i := 0; i < lengthInBytes/2; i++ {
 		r[i] = int16(p.buf[2*i]) | (int16(p.buf[2*i+1]) << 8)
@@ -430,9 +436,6 @@ func (p *Player) bufferToInt16(lengthInBytes int) []int16 {
 
 func (p *Player) proceed(length int) {
 	// This function must be called on the same goruotine of readToBuffer.
-	if p.readingCh != nil {
-		return
-	}
 	p.buf = p.buf[length:]
 	p.pos += int64(length)
 }
@@ -477,7 +480,8 @@ func (p *Player) Seek(offset time.Duration) error {
 	if err != nil {
 		return err
 	}
-	p.seekCh <- pos
+	p.buf = []uint8{}
+	p.pos = pos
 	return nil
 }
 

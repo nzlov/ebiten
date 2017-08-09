@@ -17,8 +17,8 @@ package ebiten
 import (
 	"math"
 
-	"github.com/hajimehoshi/ebiten/internal/graphics"
 	"github.com/hajimehoshi/ebiten/internal/restorable"
+	"github.com/hajimehoshi/ebiten/internal/ui"
 )
 
 func newGraphicsContext(f func(*Image) error) *graphicsContext {
@@ -64,7 +64,8 @@ func (c *graphicsContext) SetSize(screenWidth, screenHeight int, screenScale flo
 
 	w = int(float64(screenWidth) * screenScale)
 	h = int(float64(screenHeight) * screenScale)
-	c.screen = newImageWithScreenFramebuffer(w, h)
+	ox, oy := ui.ScreenOffset()
+	c.screen = newImageWithScreenFramebuffer(w, h, ox, oy)
 	_ = c.screen.Clear()
 
 	c.offscreen = offscreen
@@ -74,19 +75,12 @@ func (c *graphicsContext) SetSize(screenWidth, screenHeight int, screenScale flo
 
 func (c *graphicsContext) initializeIfNeeded() error {
 	if !c.initialized {
-		if err := graphics.Reset(); err != nil {
+		if err := restorable.ResetGLState(); err != nil {
 			return err
 		}
 		c.initialized = true
 	}
-	r, err := c.needsRestoring()
-	if err != nil {
-		return err
-	}
-	if !r {
-		return nil
-	}
-	if err := c.restore(); err != nil {
+	if err := c.restoreIfNeeded(); err != nil {
 		return err
 	}
 	return nil
@@ -102,16 +96,7 @@ func drawWithFittingScale(dst *Image, src *Image) {
 	_ = dst.DrawImage(src, op)
 }
 
-func (c *graphicsContext) drawToDefaultRenderTarget() error {
-	_ = c.screen.Clear()
-	drawWithFittingScale(c.screen, c.offscreen2)
-	if err := graphics.FlushCommands(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *graphicsContext) UpdateAndDraw(updateCount int) error {
+func (c *graphicsContext) Update(updateCount int) error {
 	if err := c.initializeIfNeeded(); err != nil {
 		return err
 	}
@@ -125,19 +110,25 @@ func (c *graphicsContext) UpdateAndDraw(updateCount int) error {
 	if 0 < updateCount {
 		drawWithFittingScale(c.offscreen2, c.offscreen)
 	}
-	if err := c.drawToDefaultRenderTarget(); err != nil {
-		return err
-	}
-	// TODO: Add tests to check if this behavior is correct (#357)
-	if err := restorable.ResolveStalePixels(); err != nil {
+	_ = c.screen.Clear()
+	drawWithFittingScale(c.screen, c.offscreen2)
+
+	if err := restorable.FlushAndResolveStalePixels(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *graphicsContext) restore() error {
-	if err := graphics.Reset(); err != nil {
+func (c *graphicsContext) restoreIfNeeded() error {
+	if !restorable.IsRestoringEnabled() {
+		return nil
+	}
+	r, err := c.needsRestoring()
+	if err != nil {
 		return err
+	}
+	if !r {
+		return nil
 	}
 	if err := restorable.Restore(); err != nil {
 		return err

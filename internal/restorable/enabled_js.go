@@ -1,4 +1,4 @@
-// Copyright 2016 Hajime Hoshi
+// Copyright 2017 The Ebiten Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !js
+// +build js
 
-package loop
+package restorable
 
 import (
-	"time"
+	"github.com/hajimehoshi/ebiten/internal/web"
 )
 
-func now() int64 {
-	return time.Now().UnixNano()
+func init() {
+	if web.IsMobileBrowser() {
+		restoringEnabled = false
+	}
 }

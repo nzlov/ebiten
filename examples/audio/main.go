@@ -14,6 +14,9 @@
 
 // +build example
 
+// This example offers an audio player.
+// See examples/wav for a simpler example to play a sound file.
+
 package main
 
 import (
@@ -25,7 +28,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/audio"
-	"github.com/hajimehoshi/ebiten/audio/vorbis"
+	"github.com/hajimehoshi/ebiten/audio/mp3"
 	"github.com/hajimehoshi/ebiten/audio/wav"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
 )
@@ -34,7 +37,7 @@ const (
 	screenWidth  = 320
 	screenHeight = 240
 
-	// This sample rate doesn't match with wav/ogg's sample rate,
+	// This sample rate doesn't match with wav/mp3's sample rate,
 	// but decoders adjust them.
 	sampleRate = 48000
 )
@@ -58,7 +61,7 @@ type Input struct {
 }
 
 func (i *Input) update() {
-	for _, key := range []ebiten.Key{ebiten.KeyP, ebiten.KeyS, ebiten.KeyX, ebiten.KeyZ} {
+	for _, key := range []ebiten.Key{ebiten.KeyP, ebiten.KeyS, ebiten.KeyX, ebiten.KeyZ, ebiten.KeyB} {
 		if !ebiten.IsKeyPressed(key) {
 			i.keyStates[key] = 0
 		} else {
@@ -88,12 +91,11 @@ type Player struct {
 	input        *Input
 	audioContext *audio.Context
 	audioPlayer  *audio.Player
+	current      time.Duration
 	total        time.Duration
-	seekedCh     chan error
 	seBytes      []uint8
 	seCh         chan []uint8
 	volume128    int
-	previousPos  time.Duration
 }
 
 var (
@@ -113,11 +115,11 @@ func NewPlayer(audioContext *audio.Context) (*Player, error) {
 	if err != nil {
 		return nil, err
 	}
-	oggF, err := ebitenutil.OpenFile("_resources/audio/ragtime.ogg")
+	mp3F, err := ebitenutil.OpenFile("_resources/audio/classic.mp3")
 	if err != nil {
 		return nil, err
 	}
-	s, err := vorbis.Decode(audioContext, oggF)
+	s, err := mp3.Decode(audioContext, mp3F)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +137,9 @@ func NewPlayer(audioContext *audio.Context) (*Player, error) {
 		total:        time.Second * time.Duration(s.Size()) / bytesPerSample / sampleRate,
 		volume128:    128,
 		seCh:         make(chan []uint8),
+	}
+	if player.total == 0 {
+		player.total = 1
 	}
 	player.audioPlayer.Play()
 	go func() {
@@ -159,18 +164,19 @@ func (p *Player) update() error {
 	case p.seBytes = <-p.seCh:
 		close(p.seCh)
 		p.seCh = nil
-	case err := <-p.seekedCh:
-		if err != nil {
-			return err
-		}
-		close(p.seekedCh)
-		p.seekedCh = nil
 	default:
+	}
+	if p.audioPlayer.IsPlaying() {
+		p.current = p.audioPlayer.Current()
 	}
 	p.updateBar()
 	p.updatePlayPause()
 	p.updateSE()
 	p.updateVolume()
+	if p.input.isKeyTriggered(ebiten.KeyB) {
+		b := ebiten.IsRunnableInBackground()
+		ebiten.SetRunnableInBackground(!b)
+	}
 	if err := p.audioContext.Update(); err != nil {
 		return err
 	}
@@ -216,9 +222,6 @@ func (p *Player) updatePlayPause() {
 }
 
 func (p *Player) updateBar() {
-	if p.seekedCh != nil {
-		return
-	}
 	if !p.input.isMouseButtonTriggered(ebiten.MouseButtonLeft) {
 		return
 	}
@@ -233,10 +236,8 @@ func (p *Player) updateBar() {
 		return
 	}
 	pos := time.Duration(x-bx) * p.total / time.Duration(bw)
-	p.seekedCh = make(chan error, 1)
-	go func() {
-		p.seekedCh <- p.audioPlayer.Seek(pos)
-	}()
+	p.current = pos
+	p.audioPlayer.Seek(pos)
 }
 
 func (p *Player) close() error {
@@ -249,11 +250,9 @@ func (p *Player) draw(screen *ebiten.Image) {
 	op.GeoM.Translate(float64(x), float64(y))
 	screen.DrawImage(playerBarImage, op)
 	currentTimeStr := "00:00"
-	c := p.audioPlayer.Current()
-	prev := p.previousPos
-	p.previousPos = c
 
 	// Current Time
+	c := p.current
 	m := (c / time.Minute) % 100
 	s := (c / time.Second) % 60
 	currentTimeStr = fmt.Sprintf("%02d:%02d", m, s)
@@ -270,10 +269,8 @@ func (p *Player) draw(screen *ebiten.Image) {
 Press S to toggle Play/Pause
 Press P to play SE
 Press Z or X to change volume of the music
+Press B to switch the run-in-background state
 %s`, ebiten.CurrentFPS(), currentTimeStr)
-	if p.audioPlayer.IsPlaying() && prev == c {
-		msg += "\nLoading..."
-	}
 	ebitenutil.DebugPrint(screen, msg)
 }
 
@@ -293,6 +290,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	musicPlayer, err = NewPlayer(audioContext)
 	if err != nil {
 		log.Fatal(err)

@@ -15,8 +15,22 @@
 package restorable
 
 import (
+	"github.com/hajimehoshi/ebiten/internal/graphics"
 	"github.com/hajimehoshi/ebiten/internal/sync"
 )
+
+// restoringEnabled indicates if restoring happens or not.
+var restoringEnabled = true // This value is overridden at enabled_*.go.
+
+func IsRestoringEnabled() bool {
+	// This value is updated only at init or EnableRestoringForTesting.
+	// No need to lock here.
+	return restoringEnabled
+}
+
+func EnableRestoringForTesting() {
+	restoringEnabled = true
+}
 
 type images struct {
 	images      map[*Image]struct{}
@@ -28,11 +42,17 @@ var theImages = &images{
 	images: map[*Image]struct{}{},
 }
 
-func ResolveStalePixels() error {
+func FlushAndResolveStalePixels() error {
+	if err := graphics.FlushCommands(); err != nil {
+		return err
+	}
 	return theImages.resolveStalePixels()
 }
 
 func Restore() error {
+	if err := graphics.ResetGLState(); err != nil {
+		return err
+	}
 	return theImages.restore()
 }
 
@@ -88,6 +108,9 @@ func (i *images) resetPixelsIfDependingOn(target *Image) {
 func (i *images) restore() error {
 	i.m.Lock()
 	defer i.m.Unlock()
+	if !IsRestoringEnabled() {
+		panic("not reached")
+	}
 	// Framebuffers/textures cannot be disposed since framebuffers/textures that
 	// don't belong to the current context.
 
@@ -147,4 +170,8 @@ func (i *images) clearVolatileImages() {
 	for img := range i.images {
 		img.clearIfVolatile()
 	}
+}
+
+func ResetGLState() error {
+	return graphics.ResetGLState()
 }

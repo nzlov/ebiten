@@ -24,6 +24,9 @@ import (
 	"github.com/gopherjs/webgl"
 )
 
+// Note that `type Texture *js.Object` doesn't work.
+// There is no way to get the internal object in that case.
+
 type Texture struct {
 	*js.Object
 }
@@ -42,6 +45,14 @@ type Program struct {
 
 type Buffer struct {
 	*js.Object
+}
+
+func (t Texture) equals(other Texture) bool {
+	return t.Object == other.Object
+}
+
+func (f Framebuffer) equals(other Framebuffer) bool {
+	return f.Object == other.Object
 }
 
 type uniformLocation struct {
@@ -297,15 +308,6 @@ func (c *Context) NewShader(shaderType ShaderType, source string) (Shader, error
 func (c *Context) DeleteShader(s Shader) {
 	gl := c.gl
 	gl.DeleteShader(s.Object)
-}
-
-func (c *Context) GlslHighpSupported() bool {
-	gl := c.gl
-	// headless-gl library may not define getShaderPrecisionFormat.
-	if gl.Get("getShaderPrecisionFormat") == js.Undefined {
-		return false
-	}
-	return gl.Call("getShaderPrecisionFormat", gl.FRAGMENT_SHADER, gl.HIGH_FLOAT).Get("precision").Int() != 0
 }
 
 func (c *Context) NewProgram(shaders []Shader) (Program, error) {

@@ -31,6 +31,14 @@ type Shader mgl.Shader
 type Program mgl.Program
 type Buffer mgl.Buffer
 
+func (t Texture) equals(other Texture) bool {
+	return t == other
+}
+
+func (f Framebuffer) equals(other Framebuffer) bool {
+	return f == other
+}
+
 type uniformLocation mgl.Uniform
 type attribLocation mgl.Attrib
 
@@ -260,17 +268,6 @@ func (c *Context) NewShader(shaderType ShaderType, source string) (Shader, error
 func (c *Context) DeleteShader(s Shader) {
 	gl := c.gl
 	gl.DeleteShader(mgl.Shader(s))
-}
-
-func (c *Context) GlslHighpSupported() bool {
-	gl := c.gl
-	_, _, precision := gl.GetShaderPrecisionFormat(mgl.FRAGMENT_SHADER, mgl.HIGH_FLOAT)
-	// On Android emulators, precision might be a wrong value (#239).
-	// TODO: If possible, check if this is running on an emulator.
-	if 64 <= precision {
-		return false
-	}
-	return precision != 0
 }
 
 func (c *Context) NewProgram(shaders []Shader) (Program, error) {

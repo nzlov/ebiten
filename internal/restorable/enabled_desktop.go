@@ -1,4 +1,4 @@
-// Copyright 2014 Hajime Hoshi
+// Copyright 2017 The Ebiten Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,29 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphics_test
+// +build darwin freebsd linux windows
+// +build !js
+// +build !android
+// +build !ios
 
-import (
-	. "github.com/hajimehoshi/ebiten/internal/graphics"
-	"testing"
-)
+package restorable
 
-func TestNextPowerOf2(t *testing.T) {
-	testCases := []struct {
-		expected int
-		arg      int
-	}{
-		{256, 255},
-		{256, 256},
-		{512, 257},
-	}
-
-	for _, testCase := range testCases {
-		got := NextPowerOf2Int(testCase.arg)
-		wanted := testCase.expected
-		if wanted != got {
-			t.Errorf("Clp(%d) = %d, wanted %d", testCase.arg, got, wanted)
-		}
-
-	}
+func init() {
+	// OpenGL (not ES) never causes context lost,
+	// so restorable feature is not needed.
+	restoringEnabled = false
 }
